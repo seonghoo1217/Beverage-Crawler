@@ -4,7 +4,11 @@ requests
 # OCR
 pytesseract
 pillow
+numpy
+opencv-python-headless
 
 # FastAPI
 fastapi
 uvicorn
+beautifulsoup4
+lxml

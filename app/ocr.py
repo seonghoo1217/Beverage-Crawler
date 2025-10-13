@@ -2,18 +2,58 @@ import pytesseract
 from PIL import Image
 import os
 import re
-import json
+import cv2
+import numpy as np
+
+def preprocess_image(image_path):
+    """이미지 전처리 함수"""
+    image = cv2.imread(image_path)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
+    # 적응형 스레시홀딩 적용
+    binary_image = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+    )
+    
+    # PIL 이미지로 변환
+    return Image.fromarray(binary_image)
+
+def extract_nutrition_data(text):
+    """OCR 텍스트에서 영양 정보 추출"""
+    nutrition = {}
+    patterns = {
+        "servingKcal": r"(?:칼로리|열량)\s*\(Kcal\)\s*([0-9,]+)",
+        "saturatedFatG": r"포화지방\s*\(g\)\s*([0-9,.]+)",
+        "proteinG": r"단백질\s*\(g\)\s*([0-9,.]+)",
+        "sodiumMg": r"나트륨\s*\(mg\)\s*([0-9,]+)",
+        "sugarG": r"당류\s*\(g\)\s*([0-9,.]+)",
+        "caffeineMg": r"카페인\s*\(mg\)\s*([0-9,]+)"
+    }
+    
+    for key, pattern in patterns.items():
+        match = re.search(pattern, text)
+        if match:
+            value_str = match.group(1).replace(',', '')
+            try:
+                nutrition[key] = float(value_str)
+            except ValueError:
+                nutrition[key] = 0
+        else:
+            nutrition[key] = 0
+            
+    return nutrition
 
 def get_ocr_data():
-    # 이미지가 저장된 폴더 경로
+    """이미지에서 OCR 데이터를 추출하는 메인 함수"""
     image_dir = './image'
     ocr_results = []
-    number_pattern = r'\d+(?:\.\d+)?'
+
+    if not os.path.exists(image_dir):
+        return []
 
     for filename in os.listdir(image_dir):
         if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
-            # 확장자 제거
-            filename_no_ext = os.path.splitext(filename)[0]  # 예: '스타벅스 꿀 호떡 라떼 GRANDE'
+            filename_no_ext = os.path.splitext(filename)[0]
             name_parts = filename_no_ext.rsplit(' ', 1)
 
             if len(name_parts) != 2:
@@ -21,23 +61,16 @@ def get_ocr_data():
 
             beverage_name, size = name_parts
             image_path = os.path.join(image_dir, filename)
-            image = Image.open(image_path)
 
-            # OCR
-            text = pytesseract.image_to_string(image, lang='kor+eng')
-            values = re.findall(number_pattern, text)
+            # 이미지 전처리
+            preprocessed_image = preprocess_image(image_path)
 
-            if len(values) >= 6:
-                nutrition = {
-                    "servingKcal": int(float(values[0])),
-                    "saturatedFatG": int(float(values[1])),
-                    "proteinG": int(float(values[2])),
-                    "sodiumMg": int(float(values[3])),
-                    "sugarG": int(float(values[4])),
-                    "caffeineMg": int(float(values[5]))
-                }
-            else:
-                nutrition = {}
+            # OCR 실행 (화이트리스트 제거)
+            config = r'--oem 3 --psm 6'
+            text = pytesseract.image_to_string(preprocessed_image, lang='kor+eng', config=config)
+            
+            # 영양 정보 추출
+            nutrition = extract_nutrition_data(text)
 
             ocr_results.append({
                 "name": beverage_name.strip(),
@@ -46,3 +79,9 @@ def get_ocr_data():
             })
     
     return ocr_results
+
+if __name__ == '__main__':
+    # 테스트용
+    results = get_ocr_data()
+    import json
+    print(json.dumps(results, indent=4, ensure_ascii=False))
