@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Query
 from app.merge import get_all_beverages
+from app.pipelines import run_medallion_batch
 from typing import Optional
 
 # FastAPI 애플리케이션 생성
@@ -25,3 +26,13 @@ def get_beverages_endpoint(brand: Optional[str] = Query(None, description="조�
     """
     all_data = get_all_beverages(brand=brand)
     return {"count": len(all_data), "data": all_data}
+
+
+@app.post("/api/v1/pipeline/run", tags=["Pipeline"], summary="Medallion 파이프라인 수동 실행")
+def trigger_pipeline(manual: bool = True):
+    """
+    Bronze→Silver→Gold 파이프라인을 수동으로 트리거합니다.
+    현재는 배치 식별자를 기록만 하며, 후속 구현에서 실제 파이프라인을 호출합니다.
+    """
+    result = run_medallion_batch(triggered_by="manual" if manual else "system")
+    return {"batchId": result.batch_id, "status": result.status, "details": result.details}

@@ -9,12 +9,15 @@ def preprocess_image(image_path):
     """이미지 전처리 함수"""
     image = cv2.imread(image_path)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    
-    # 적응형 스레시홀딩 적용
-    binary_image = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+
+    # 가우시안 블러로 노이즈 제거
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+
+    # Otsu's Binarization을 사용한 이진화
+    _, binary_image = cv2.threshold(
+        blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )
-    
+
     # PIL 이미지로 변환
     return Image.fromarray(binary_image)
 
@@ -65,7 +68,7 @@ def get_ocr_data():
             # 이미지 전처리
             preprocessed_image = preprocess_image(image_path)
 
-            # OCR 실행 (화이트리스트 제거)
+            # OCR 실행 (psm 모드 원복)
             config = r'--oem 3 --psm 6'
             text = pytesseract.image_to_string(preprocessed_image, lang='kor+eng', config=config)
             

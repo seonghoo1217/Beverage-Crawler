@@ -12,3 +12,8 @@ fastapi
 uvicorn
 beautifulsoup4
 lxml
+httpx
+pydantic>=2.5.0
+jsonschema>=4.23.0
+ruff>=0.6.0
+radon>=6.0.1

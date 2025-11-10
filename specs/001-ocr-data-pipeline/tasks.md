@@ -13,11 +13,11 @@
 
 **Purpose**: 프로젝트 디렉터리·환경 초기화 및 필수 도구 세팅
 
-- [ ] T001 생성된 파이프라인 폴더 구조 확인 및 `storage/bronze|silver|gold` 디렉터리/`.keep` 파일 생성 (`app/storage/`)
-- [ ] T002 `.env` 혹은 설정 파일에 브랜드별 크롤링 URL·스케줄 파라미터를 정의하고 샘플 값을 추가 (`app/config/settings.py`)
-- [ ] T003 [P] FastAPI 배치 진입점에서 medallion 파이프라인을 트리거할 CLI/엔드포인트 골격 작성 (`app/main.py`)
-- [ ] T004 [P] requirements에 lint/정적분석 도구(`ruff`, `radon`)와 jsonschema, pydantic 버전 명시 후 잠금 (`app/requirements.txt`)
-- [ ] T005 CI 혹은 로컬 pre-commit 스크립트에 lint + maintainability 체크 파이프라인 추가 (`.github/workflows/ci.yml` 또는 `scripts/precommit.sh`)
+- [x] T001 생성된 파이프라인 폴더 구조 확인 및 `storage/bronze|silver|gold` 디렉터리/`.keep` 파일 생성 (`app/storage/`)
+- [x] T002 `.env` 혹은 설정 파일에 브랜드별 크롤링 URL·스케줄 파라미터를 정의하고 샘플 값을 추가 (`app/config/settings.py`)
+- [x] T003 [P] FastAPI 배치 진입점에서 medallion 파이프라인을 트리거할 CLI/엔드포인트 골격 작성 (`app/main.py`)
+- [x] T004 [P] requirements에 lint/정적분석 도구(`ruff`, `radon`)와 jsonschema, pydantic 버전 명시 후 잠금 (`app/requirements.txt`)
+- [x] T005 CI 혹은 로컬 pre-commit 스크립트에 lint + maintainability 체크 파이프라인 추가 (`.github/workflows/ci.yml` 또는 `scripts/precommit.sh`)
 
 ---
 
