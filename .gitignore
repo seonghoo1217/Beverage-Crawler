@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+build/
+dist/
+*.egg-info/
+
+# Editors & OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs & temp
+*.log
+*.tmp
+*.swp
+
+# Environment
+.env
+.env.*
+
+# Data / storage outputs
+app/storage/bronze/
+app/storage/silver/
+app/storage/gold/
+data/
