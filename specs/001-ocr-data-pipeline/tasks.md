@@ -31,11 +31,11 @@
 `High-Fidelity OCR Backbone` (benchmark suite + labeled dataset prep),
 and `Lean Dependency Discipline` (dependency review checklist).
 
-- [ ] T006 Bronze→Silver→Gold 공통 스키마(pydantic models + jsonschema)를 정의하고 버전 태그 추가 (`app/pipelines/models.py`)
-- [ ] T007 [P] Duplicate/Checksum 검증 유틸 작성: 배치마다 원천 해시·중복 탐지 로직 구현 (`app/pipelines/validators/dedup_validator.py`)
-- [ ] T008 [P] Structured logging 헬퍼 및 Prometheus 메트릭 수집 지표 정의 (`app/observability/logging.py`, `app/observability/metrics.py`)
-- [ ] T009 OCR 벤치마크 스크립트 초안과 벤치마크용 캡처 목록 manifest 작성 (`scripts/ocr_benchmark.py`, `data/benchmarks/manifest.json`)
-- [ ] T010 의존성 결정 로그 템플릿 작성 및 README 링크 추가 (설명서에 새 라이브러리 도입 근거 기록) (`docs/DEPENDENCY_DECISIONS.md`)
+- [x] T006 Bronze→Silver→Gold 공통 스키마(pydantic models + jsonschema)를 정의하고 버전 태그 추가 (`app/pipelines/models.py`)
+- [x] T007 [P] Duplicate/Checksum 검증 유틸 작성: 배치마다 원천 해시·중복 탐지 로직 구현 (`app/pipelines/validators/dedup_validator.py`)
+- [x] T008 [P] Structured logging 헬퍼 및 Prometheus 메트릭 수집 지표 정의 (`app/observability/logging.py`, `app/observability/metrics.py`)
+- [x] T009 OCR 벤치마크 스크립트 초안과 벤치마크용 캡처 목록 manifest 작성 (`scripts/ocr_benchmark.py`, `data/benchmarks/manifest.json`)
+- [x] T010 의존성 결정 로그 템플릿 작성 및 README 링크 추가 (설명서에 새 라이브러리 도입 근거 기록) (`docs/DEPENDENCY_DECISIONS.md`)
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
