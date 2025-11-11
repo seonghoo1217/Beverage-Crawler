@@ -1,76 +1,163 @@
-import requests
+"""Starbucks crawler with schema drift detection and Bronze-ready payloads."""
+from __future__ import annotations
+
 import json
-from app.utils import get_beverage_temperature
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Iterable
 
-def clean_nutrition_value(value):
-    """영양성분 값이 .1처럼 1 미만일 경우 0으로 처리합니다."""
-    if not value:
-        return value
-    try:
-        # 문자열을 float으로 변환 시도
-        float_value = float(value)
-        # 1 미만인 경우 "0"으로 반환
-        if abs(float_value) < 1:
-            return "0"
-    except (ValueError, TypeError):
-        # 변환 실패 시 원래 값 반환
-        return value
-    # 그 외의 경우 원래 값 반환
-    return value
+import requests
 
-def get_crawled_data():
-    # JS 파일 주소 목록 (카테고리별)
-    urls = {
+from app.config.settings import settings
+from app.observability.logging import log_event
+from app.pipelines.models import BronzeRecord, SourceArtifact
+from app.pipelines.validators.dedup_validator import calculate_checksum
+
+
+@dataclass
+class StarbucksMenuItem:
+    product_name: str
+    beverage_type: str
+    image_url: str
+    nutrition_raw: dict
+
+
+class StarbucksCrawler:
+    CATEGORY_MAP = {
         "W0000003": "ESPRESSO",
         "W0000171": "COLD_BREW",
         "W0000060": "COLD_BREW",
         "W0000004": "FRAPPUCCINO",
         "W0000005": "BLENDED",
         "W0000075": "TEA",
-        "W0000422": "REFRESHER",      # ANY -> REFRESHER
-        "W0000061": "FIZZIO",          # ANY -> FIZZIO
-        "W0000053": "OTHERS",         # ANY -> OTHERS
-        "W0000062": "JUICE_YOGURT",   # ANY -> JUICE_YOGURT
+        "W0000422": "REFRESHER",
+        "W0000061": "FIZZIO",
+        "W0000053": "OTHERS",
+        "W0000062": "JUICE_YOGURT",
+    }
+    EXPECTED_FIELDS = {
+        "product_NM",
+        "kcal",
+        "sat_FAT",
+        "protein",
+        "sodium",
+        "sugars",
+        "caffeine",
+        "file_PATH",
     }
 
-    # 전체 결과 저장 리스트
-    result = []
-
-    # 크롤링 시작
-    for code, beverage_type in urls.items():
-        url = f"https://www.starbucks.co.kr/upload/json/menu/{code}.js"
-        res = requests.get(url)
-        text = res.text.replace("\ufeff", "")  # BOM 제거
-
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            print(f"JSON 파싱 실패: {url}")
-            continue
-
-        for item in data.get("list", []):
-            name = item.get("product_NM")
-            image_path = f"https://www.starbucks.co.kr{item.get('file_PATH', '')}"
-
-            # Tall 사이즈 정보를 기본으로 입력 (값 클리닝 로직 추가)
-            tall_nutrition = {
-                "servingKcal": clean_nutrition_value(item.get("kcal")),
-                "saturatedFatG": clean_nutrition_value(item.get("sat_FAT")),
-                "proteinG": clean_nutrition_value(item.get("protein")),
-                "sodiumMg": clean_nutrition_value(item.get("sodium")),
-                "sugarG": clean_nutrition_value(item.get("sugars")),
-                "caffeineMg": clean_nutrition_value(item.get("caffeine"))
+    def __init__(self, session: requests.Session | None = None) -> None:
+        self.session = session or requests.Session()
+        self.session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (compatible; StarbucksBot/1.0)",
+                "Accept": "application/json",
             }
+        )
 
-            result.append({
-                "brand": "STARBUCKS",
-                "name": name,
-                "image": image_path,
-                "beverageType": beverage_type,
-                "beverageTemperature": get_beverage_temperature(name, beverage_type),
-                "beverageNutritions": {
-                    "TALL": tall_nutrition
-                }
-            })
+    def fetch_all(self) -> list[StarbucksMenuItem]:
+        payloads: list[StarbucksMenuItem] = []
+        for code, beverage_type in self.CATEGORY_MAP.items():
+            url = f"https://www.starbucks.co.kr/upload/json/menu/{code}.js"
+            response = self.session.get(url, timeout=15)
+            if response.status_code != 200:
+                log_event(
+                    "starbucks.crawl_http_error",
+                    url=url,
+                    status=response.status_code,
+                )
+                continue
+            text = response.text.replace("\ufeff", "")
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                log_event("starbucks.schema_drift", url=url, reason="json_decode_failed")
+                continue
+            for entry in data.get("list", []):
+                missing = self.EXPECTED_FIELDS - entry.keys()
+                if missing:
+                    log_event(
+                        "starbucks.schema_drift",
+                        url=url,
+                        missing_fields=",".join(sorted(missing)),
+                    )
+                    continue
+                payloads.append(
+                    StarbucksMenuItem(
+                        product_name=entry["product_NM"].strip(),
+                        beverage_type=beverage_type,
+                        image_url=f"https://www.starbucks.co.kr{entry['file_PATH']}",
+                        nutrition_raw={
+                            "servingKcal": entry["kcal"],
+                            "saturatedFatG": entry["sat_FAT"],
+                            "proteinG": entry["protein"],
+                            "sodiumMg": entry["sodium"],
+                            "sugarG": entry["sugars"],
+                            "caffeineMg": entry["caffeine"],
+                        },
+                    )
+                )
+            time.sleep(0.2)
+        return payloads
 
-    return result
+
+def _normalize_int(value: str | int | float | None) -> int:
+    if value in (None, "", " "):
+        return 0
+    try:
+        return int(float(str(value).replace(",", "")))
+    except ValueError:
+        return 0
+
+
+def to_bronze_records(
+    items: Iterable[StarbucksMenuItem],
+    batch_id: str,
+    ocr_lookup: dict[tuple[str, str], dict] | None = None,
+) -> List[BronzeRecord]:
+    ocr_lookup = ocr_lookup or {}
+    records: list[BronzeRecord] = []
+    for item in items:
+        key = (item.product_name.upper(), "TALL")
+        ocr_payload = ocr_lookup.get(key)
+        source = SourceArtifact(
+            brand="Starbucks",
+            batch_id=batch_id,
+            source_type="HTML",
+            uri="https://www.starbucks.co.kr/menu/drink_list.do",
+            checksum=calculate_checksum(item.nutrition_raw),
+            collected_at=datetime.utcnow(),
+        )
+        records.append(
+            BronzeRecord(
+                brand="Starbucks",
+                product_name=item.product_name,
+                size="TALL",
+                beverage_type=item.beverage_type,
+                nutrition_raw={
+                    "servingMl": 0,
+                    **{k: _normalize_int(v) for k, v in item.nutrition_raw.items()},
+                },
+                source=source,
+                ocr_nutrition=ocr_payload.get("nutrition") if ocr_payload else None,
+                ocr_confidence=ocr_payload.get("confidence") if ocr_payload else None,
+            )
+        )
+    return records
+
+
+def get_crawled_data() -> list[dict]:
+    """Backward-compatible helper returning dict payloads for existing callers."""
+    crawler = StarbucksCrawler()
+    items = crawler.fetch_all()
+    return [
+        {
+            "brand": "STARBUCKS",
+            "name": item.product_name,
+            "image": item.image_url,
+            "beverageType": item.beverage_type,
+            "beverageNutritions": {"TALL": item.nutrition_raw},
+        }
+        for item in items
+    ]
