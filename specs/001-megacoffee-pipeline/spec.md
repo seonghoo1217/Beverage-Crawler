@@ -1,4 +1,4 @@
-지ㄱ# Feature Specification: Starbucks · MegaCoffee 데이터 정합성 파이프라인
+# Feature Specification: Starbucks · MegaCoffee 데이터 정합성 파이프라인
 
 **Feature Branch**: `001-ocr-data-pipeline`  
 **Created**: 2025-11-10  

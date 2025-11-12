@@ -1,162 +1,152 @@
+"""MegaCoffee crawler limited to menu_category1=1&menu_category2=1."""
+from __future__ import annotations
+
+import re
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Iterable, List
+
 import requests
 from bs4 import BeautifulSoup
-import re
-import json
-import sys
 
-def get_size_from_volume(volume_ml):
-    """Maps volume in ml to a beverage size name."""
-    return "MEGA", volume_ml
+from app.config.settings import settings
+from app.observability.logging import log_event
+from app.pipelines.models import BronzeRecord, SourceArtifact
+from app.pipelines.validators.dedup_validator import calculate_checksum
+from app.pipelines.mappers.megacoffee_mapper import resolve_beverage_type
 
-def infer_beverage_type_from_name(name: str, current_type: str) -> str:
-    name_lower = name.lower()
 
-    # Keywords for specific types
-    if "커피" in name_lower or "아메리카노" in name_lower or ("라떼" in name_lower and "녹차" not in name_lower and "초코" not in name_lower):
-        return "COFFEE"
-    if "에이드" in name_lower or "주스" in name_lower:
-        return "ADE_JUICE"
-    if "스무디" in name_lower or "프라페" in name_lower or "쉐이크" in name_lower:
-        return "SMOOTHIE_FRAPPE"
-    if "티" in name_lower or "차" in name_lower or "녹차" in name_lower:
-        return "TEA"
-    if "초코" in name_lower or "핫초코" in name_lower:
-        return "CHOCOLATE" # New type for chocolate beverages
-    if "에스프레소" in name_lower:
-        return "ESPRESSO"
-    if "콜드 브루" in name_lower:
-        return "COLD_BREW"
-    if "블렌디드" in name_lower:
-        return "BLENDED"
-    if "피지오" in name_lower:
-        return "FIZZIO"
-    if "리프레셔" in name_lower:
-        return "REFRESHER"
+@dataclass
+class MegaCoffeeMenuItem:
+    product_name: str
+    beverage_type: str | None
+    image_url: str
+    nutrition_raw: dict
 
-    # If no specific keyword, use the current_type from category_map or default to OTHERS
-    if current_type == "BEVERAGE" or current_type == "OTHERS":
-        return "OTHERS" # Keep it as OTHERS if it's a generic BEVERAGE
-    return current_type # Otherwise, keep the type from category_map
 
-def get_megacoffee_data():
-    """
-    Crawls Mega Coffee's official website to get beverage data, handling pagination.
-    Returns a list of beverage dictionaries.
-    """
-    base_url = "https://www.mega-mgccoffee.com"
-    menu_api_url = f"{base_url}/menu/menu.php"
-    beverages = []
+class MegaCoffeeCrawler:
+    BASE_URL = "https://www.mega-mgccoffee.com"
+    MENU_URL = f"{BASE_URL}/menu/menu.php"
+    CATEGORY1 = "1"
+    CATEGORY2 = "1"
 
-    headers = {
-        'Referer': f'{base_url}/menu/menu_list.html'
-    }
-
-    category_map = {
-        1: "COFFEE",
-        2: "BEVERAGE",
-        3: "SMOOTHIE_FRAPPE",
-        4: "ADE_JUICE",
-        5: "TEA",
-    }
-
-    print("Starting Mega Coffee crawl.") # DEBUG
-    # Iterate through beverage sub-categories
-    for sub_category_code in range(1, 10):
-        beverage_type = category_map.get(sub_category_code, "OTHERS")
-        print(f"\nProcessing category code: {sub_category_code}, Type: {beverage_type}") # DEBUG
-
-        for page in range(1, 20): # Loop through a max of 19 pages (1 to 19)
-            params = {
-                'menu_category1': '1',
-                'menu_category2': sub_category_code,
-                'category': '',
-                'list_checkbox_all': 'all'
+    def __init__(self, session: requests.Session | None = None) -> None:
+        self.session = session or requests.Session()
+        self.session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (compatible; MegaCoffeeBot/1.0)",
+                "Referer": f"{self.BASE_URL}/menu/menu_list.html",
             }
-            if page > 1:
-                params['page'] = page
+        )
 
-            try:
-                response = requests.get(menu_api_url, params=params, headers=headers)
-                response.raise_for_status()
-                response.encoding = 'utf-8'
-            except requests.RequestException as e:
-                print(f"Failed to fetch category {sub_category_code} page {page}: {e}", file=sys.stderr)
-                break # Stop trying this category if a page fails
+    def fetch_all(self) -> list[MegaCoffeeMenuItem]:
+        page = 1
+        items: list[MegaCoffeeMenuItem] = []
+        while True:
+            params = {
+                "menu_category1": self.CATEGORY1,
+                "menu_category2": self.CATEGORY2,
+                "list_checkbox_all": "all",
+                "page": page,
+            }
+            response = self.session.get(self.MENU_URL, params=params, timeout=15)
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"MegaCoffee category fetch failed {response.status_code}"
+                )
+            soup = BeautifulSoup(response.text, "lxml")
+            li_nodes = soup.find_all("li")
+            if not li_nodes:
+                break
+            for node in li_nodes:
+                parsed = self._parse_node(node)
+                if parsed:
+                    items.append(parsed)
+            page += 1
+            time.sleep(0.2)
+        if not items:
+            raise RuntimeError("MegaCoffee crawl returned zero beverages")
+        return items
 
-            soup = BeautifulSoup(response.text, 'lxml')
-            items = soup.find_all("li")
-            
-            print(f"  Page {page}: Found {len(items)} items.") # DEBUG
+    def _parse_node(self, node) -> MegaCoffeeMenuItem | None:
+        name_tag = node.select_one(".cont_text_title b")
+        if not name_tag:
+            return None
+        raw_name = name_tag.get_text(strip=True)
+        cleaned_name = (
+            raw_name.replace("(HOT)", "").replace("(ICE)", "").replace("(ICED)", "").strip()
+        )
+        img_tag = node.select_one(".cont_gallery_list_img img")
+        if not img_tag:
+            return None
+        img_url = img_tag.get("src", "")
+        modal = node.select_one(".inner_modal")
+        if not modal:
+            return None
+        modal_text = modal.get_text(separator=" ")
+        nutrition_raw = self._extract_nutrition(modal_text)
+        beverage_type = resolve_beverage_type(cleaned_name, modal.get("data-type"))
+        return MegaCoffeeMenuItem(
+            product_name=cleaned_name,
+            beverage_type=beverage_type,
+            image_url=img_url,
+            nutrition_raw=nutrition_raw,
+        )
 
-            # If no items are found, it means we've reached the last page for this category
-            if not items:
-                print(f"  No items found on page {page}. Breaking page loop for category {sub_category_code}.") # DEBUG
-                break # Exit the page loop for this category
+    @staticmethod
+    def _extract_nutrition(text: str) -> dict:
+        def _match(pattern: str) -> float:
+            match = re.search(pattern, text)
+            return float(match.group(1)) if match else 0.0
 
-            for item in items:
-                name_tag = item.select_one(".cont_text_title b")
-                if not name_tag:
-                    continue
-                name = name_tag.text.strip()
+        return {
+            "servingMl": _match(r"([0-9.]+)\s*ml"),
+            "servingKcal": _match(r"1회 제공량\s*([0-9.]+)\s*kcal"),
+            "sugarG": _match(r"당류\s*([0-9.]+)\s*g"),
+            "proteinG": _match(r"단백질\s*([0-9.]+)\s*g"),
+            "saturatedFatG": _match(r"포화지방\s*([0-9.]+)\s*g"),
+            "sodiumMg": _match(r"나트륨\s*([0-9.]+)\s*mg"),
+            "caffeineMg": _match(r"카페인\s*([0-9.]+)\s*mg"),
+        }
 
-                img_tag = item.select_one(".cont_gallery_list_img img")
-                if not img_tag:
-                    continue
-                img_src = img_tag.get('src', '')
 
-                modal = item.select_one(".inner_modal")
-                if not modal:
-                    continue
-                
-                modal_text = modal.get_text(separator=' ')
+def to_bronze_records(
+    items: Iterable[MegaCoffeeMenuItem], batch_id: str
+) -> List[BronzeRecord]:
+    records: list[BronzeRecord] = []
+    for item in items:
+        source = SourceArtifact(
+            brand="MegaCoffee",
+            batch_id=batch_id,
+            source_type="HTML",
+            uri=f"{MegaCoffeeCrawler.BASE_URL}/menu/?menu_category1=1&menu_category2=1",
+            checksum=calculate_checksum(item.nutrition_raw),
+            collected_at=datetime.utcnow(),
+        )
+        records.append(
+            BronzeRecord(
+                brand="MegaCoffee",
+                product_name=item.product_name,
+                size="MEGA",
+                beverage_type=item.beverage_type,
+                nutrition_raw=item.nutrition_raw,
+                source=source,
+            )
+        )
+    return records
 
-                volume_match = re.search(r"([0-9.]+)" + "ml", modal_text)
-                kcal_match = re.search(r"1회 제공량 ([0-9.]+)\s*kcal", modal_text)
-                sugar_match = re.search(r"당류 ([0-9.]+)\s*g", modal_text)
-                protein_match = re.search(r"단백질 ([0-9.]+)\s*g", modal_text)
-                fat_match = re.search(r"포화지방 ([0-9.]+)\s*g", modal_text)
-                sodium_match = re.search(r"나트륨 ([0-9.]+)\s*mg", modal_text)
-                caffeine_match = re.search(r"카페인 ([0-9.]+)\s*mg", modal_text)
 
-                volume_ml = float(volume_match.group(1)) if volume_match else 0
-                if volume_ml == 0:
-                    continue
-
-                size_name, size_volume = get_size_from_volume(volume_ml)
-                temperature = "ICED" if "(ICE)" in name.upper() or item.select_one(".cont_gallery_list_label2") else "HOT"
-
-                nutrition_info = {
-                    "size": size_name,
-                    "volume": size_volume,
-                    "servingKcal": float(kcal_match.group(1)) if kcal_match else 0,
-                    "sugarG": float(sugar_match.group(1)) if sugar_match else 0,
-                    "proteinG": float(protein_match.group(1)) if protein_match else 0,
-                    "saturatedFatG": float(fat_match.group(1)) if fat_match else 0,
-                    "sodiumMg": float(sodium_match.group(1)) if sodium_match else 0,
-                    "caffeineMg": float(caffeine_match.group(1)) if caffeine_match else 0,
-                }
-                
-                cleaned_name = name.replace("(HOT)", "").replace("(ICE)", "").strip()
-                inferred_beverage_type = infer_beverage_type_from_name(cleaned_name, beverage_type)
-
-                existing_beverage = next((b for b in beverages if b["name"] == cleaned_name), None)
-                if existing_beverage:
-                    is_duplicate = any(nutri['size'] == nutrition_info['size'] for nutri in existing_beverage["beverageNutritions"])
-                    if not is_duplicate:
-                        existing_beverage["beverageNutritions"].append(nutrition_info)
-                else:
-                    beverages.append({
-                        "brand": "MEGA_COFFEE",
-                        "name": cleaned_name,
-                        "image": img_src,
-                        "beverageType": inferred_beverage_type,
-                        "beverageTemperature": temperature,
-                        "beverageNutritions": [nutrition_info]
-                    })
-
-    print(f"\nFinished Mega Coffee crawl. Total beverages found: {len(beverages)}") # DEBUG
-    return beverages
-
-if __name__ == '__main__':
-    data = get_megacoffee_data()
-    print(json.dumps(data, indent=4, ensure_ascii=False))
+def get_megacoffee_data() -> list[dict]:
+    crawler = MegaCoffeeCrawler()
+    items = crawler.fetch_all()
+    return [
+        {
+            "brand": "MEGA_COFFEE",
+            "name": item.product_name,
+            "image": item.image_url,
+            "beverageType": item.beverage_type,
+            "beverageNutritions": [{"size": "MEGA", **item.nutrition_raw}],
+        }
+        for item in items
+    ]
