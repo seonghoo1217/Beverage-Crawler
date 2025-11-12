@@ -34,6 +34,8 @@ class Settings:
     storage_root: Path = Path("app/storage")
     ocr_retry_count: int = 3
     alert_webhook_url: str = ""  # TODO: 채널 확정 시 입력
+    spring_endpoint: str = ""
+    spring_api_token: str = ""
     additional_brands: Dict[str, BrandConfig] = field(default_factory=dict)
 
 

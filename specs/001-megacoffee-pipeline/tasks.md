@@ -92,13 +92,13 @@ and `Lean Dependency Discipline` (dependency review checklist).
 
 ### Implementation for User Story 3
 
-- [ ] T024 [US3] 브랜드 병합 및 중복 제거 로직 (음료명+사이즈 키) 구현 (`app/pipelines/merger.py`)
-- [ ] T025 [P] [US3] 사이즈·타입 규칙 위반 자동 차단 및 보고서 생성 (`app/pipelines/validators/integrity_validator.py`)
-- [ ] T026 [US3] Spring 서버 전송 JSON 빌더에서 스키마 필드(productId, isLiked 포함) 구성 (`app/pipelines/publishers/spring_payload_builder.py`)
-- [ ] T027 [P] [US3] 전송 실패 재시도(최대 3회) + 경보 트리거 추가 (`app/pipelines/publishers/spring_dispatcher.py`)
-- [ ] T028 [US3] Gold tier JSON 생성 시 productId/isLiked 제거, 브랜드별 공개 구조로 저장 (`app/pipelines/gold_publish.py`)
-- [ ] T029 [US3] Gold JSON 제공 FastAPI 엔드포인트/정적 파일 핸들러 추가 (`app/routes/gold_data.py`)
-- [ ] T030 [US3] 최종 전달 후 5분 이내 응답 모니터링 및 보고 (`app/observability/alerts.py`)
+- [x] T024 [US3] 브랜드 병합 및 중복 제거 로직 (음료명+사이즈 키) 구현 (`app/pipelines/merger.py`)
+- [x] T025 [P] [US3] 사이즈·타입 규칙 위반 자동 차단 및 보고서 생성 (`app/pipelines/validators/integrity_validator.py`)
+- [x] T026 [US3] Spring 서버 전송 JSON 빌더에서 스키마 필드(productId, isLiked 포함) 구성 (`app/pipelines/publishers/spring_payload_builder.py`)
+- [x] T027 [P] [US3] 전송 실패 재시도(최대 3회) + 경보 트리거 추가 (`app/pipelines/publishers/spring_dispatcher.py`)
+- [x] T028 [US3] Gold tier JSON 생성 시 productId/isLiked 제거, 브랜드별 공개 구조로 저장 (`app/pipelines/gold_publish.py`)
+- [x] T029 [US3] Gold JSON 제공 FastAPI 엔드포인트/정적 파일 핸들러 추가 (`app/routes/gold_data.py`)
+- [x] T030 [US3] 최종 전달 후 5분 이내 응답 모니터링 및 보고 (`app/observability/alerts.py`)
 
 **Parallel Example**:
 `T024` 병합 로직과 `T026` Spring JSON 빌더는 인터페이스만 맞추면 동시에 진행 가능.
