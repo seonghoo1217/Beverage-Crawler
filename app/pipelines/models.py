@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Sequence
+from typing import Dict, Literal, Optional, Sequence, Union
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -14,7 +14,7 @@ class SourceArtifact(BaseModel):
     brand: BrandName
     batch_id: str
     source_type: Literal["HTML", "PNG"]
-    uri: HttpUrl | str
+    uri: Union[HttpUrl, str]
     checksum: str
     collected_at: datetime
 
@@ -33,10 +33,11 @@ class BronzeRecord(BaseModel):
     brand: BrandName
     product_name: str
     size: SizeCode
-    beverage_type: str | None
+    beverage_type: Optional[str]
     nutrition_raw: dict
     source: SourceArtifact
-    ocr_confidence: float | None = Field(default=None, ge=0, le=1)
+    ocr_nutrition: Optional[dict] = None
+    ocr_confidence: Optional[float] = Field(default=None, ge=0, le=1)
 
 
 class SilverRecord(BaseModel):
@@ -47,7 +48,7 @@ class SilverRecord(BaseModel):
     nutrition: NutritionProfile
     source_batch: str
     validation_status: Literal["clean", "needs_review"]
-    notes: str | None = None
+    notes: Optional[str] = None
 
 
 class GoldBrandPayload(BaseModel):

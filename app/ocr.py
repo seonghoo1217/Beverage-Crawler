@@ -1,90 +1,111 @@
-import pytesseract
-from PIL import Image
+"""OCR helpers with retry + confidence scoring."""
+from __future__ import annotations
+
 import os
 import re
+from pathlib import Path
+from typing import Dict, Tuple
+
 import cv2
-import numpy as np
+import pytesseract
+from PIL import Image
 
-def preprocess_image(image_path):
-    """이미지 전처리 함수"""
-    image = cv2.imread(image_path)
+FieldMap = {
+    "servingKcal": r"(?:칼로리|열량)\s*\(Kcal\)\s*([0-9,]+)",
+    "saturatedFatG": r"포화지방\s*\(g\)\s*([0-9,.]+)",
+    "proteinG": r"단백질\s*\(g\)\s*([0-9,.]+)",
+    "sodiumMg": r"나트륨\s*\(mg\)\s*([0-9,]+)",
+    "sugarG": r"당류\s*\(g\)\s*([0-9,.]+)",
+    "caffeineMg": r"카페인\s*\(mg\)\s*([0-9,]+)",
+}
+
+
+def preprocess_image(image_path: str | os.PathLike[str]) -> Image.Image:
+    image = cv2.imread(str(image_path))
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    # 가우시안 블러로 노이즈 제거
     blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-
-    # Otsu's Binarization을 사용한 이진화
     _, binary_image = cv2.threshold(
         blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )
-
-    # PIL 이미지로 변환
     return Image.fromarray(binary_image)
 
-def extract_nutrition_data(text):
-    """OCR 텍스트에서 영양 정보 추출"""
+
+def extract_nutrition_data(text: str) -> dict:
     nutrition = {}
-    patterns = {
-        "servingKcal": r"(?:칼로리|열량)\s*\(Kcal\)\s*([0-9,]+)",
-        "saturatedFatG": r"포화지방\s*\(g\)\s*([0-9,.]+)",
-        "proteinG": r"단백질\s*\(g\)\s*([0-9,.]+)",
-        "sodiumMg": r"나트륨\s*\(mg\)\s*([0-9,]+)",
-        "sugarG": r"당류\s*\(g\)\s*([0-9,.]+)",
-        "caffeineMg": r"카페인\s*\(mg\)\s*([0-9,]+)"
-    }
-    
-    for key, pattern in patterns.items():
+    for key, pattern in FieldMap.items():
         match = re.search(pattern, text)
         if match:
-            value_str = match.group(1).replace(',', '')
+            value_str = match.group(1).replace(",", "")
             try:
                 nutrition[key] = float(value_str)
             except ValueError:
                 nutrition[key] = 0
         else:
             nutrition[key] = 0
-            
     return nutrition
 
-def get_ocr_data():
-    """이미지에서 OCR 데이터를 추출하는 메인 함수"""
-    image_dir = './image'
-    ocr_results = []
 
-    if not os.path.exists(image_dir):
-        return []
+def _confidence_from_nutrition(nutrition: dict) -> float:
+    total = len(nutrition)
+    filled = sum(1 for val in nutrition.values() if val and val > 0)
+    return round(filled / total, 2) if total else 0.0
 
-    for filename in os.listdir(image_dir):
-        if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
-            filename_no_ext = os.path.splitext(filename)[0]
-            name_parts = filename_no_ext.rsplit(' ', 1)
 
-            if len(name_parts) != 2:
-                continue
+def ocr_drink(image_path: str | os.PathLike[str]) -> str:
+    preprocessed_image = preprocess_image(image_path)
+    config = r"--oem 3 --psm 6"
+    return pytesseract.image_to_string(
+        preprocessed_image, lang="kor+eng", config=config
+    )
 
-            beverage_name, size = name_parts
-            image_path = os.path.join(image_dir, filename)
 
-            # 이미지 전처리
-            preprocessed_image = preprocess_image(image_path)
+def run_ocr_with_retries(
+    image_path: str | os.PathLike[str], retries: int = 3
+) -> Tuple[dict, float]:
+    best_payload: dict | None = None
+    best_confidence = -1.0
+    for _ in range(max(1, retries)):
+        text = ocr_drink(image_path)
+        nutrition = extract_nutrition_data(text)
+        confidence = _confidence_from_nutrition(nutrition)
+        if confidence > best_confidence:
+            best_payload = nutrition
+            best_confidence = confidence
+    return best_payload or {}, max(best_confidence, 0.0)
 
-            # OCR 실행 (psm 모드 원복)
-            config = r'--oem 3 --psm 6'
-            text = pytesseract.image_to_string(preprocessed_image, lang='kor+eng', config=config)
-            
-            # 영양 정보 추출
-            nutrition = extract_nutrition_data(text)
 
-            ocr_results.append({
-                "name": beverage_name.strip(),
-                "size": size.strip(),
-                "beverageNutrition": nutrition
-            })
-    
-    return ocr_results
+def collect_ocr_dataset(
+    image_dir: str | os.PathLike[str] = "./image", retries: int = 3
+) -> Dict[tuple[str, str], dict]:
+    directory = Path(image_dir)
+    if not directory.exists():
+        return {}
+    dataset: Dict[tuple[str, str], dict] = {}
+    for path in directory.iterdir():
+        if not path.suffix.lower() in {".jpg", ".jpeg", ".png"}:
+            continue
+        filename_no_ext = path.stem
+        name_parts = filename_no_ext.rsplit(" ", 1)
+        if len(name_parts) != 2:
+            continue
+        beverage_name, size = name_parts
+        nutrition, confidence = run_ocr_with_retries(path, retries=retries)
+        dataset[(beverage_name.strip().upper(), size.strip().upper())] = {
+            "nutrition": nutrition,
+            "confidence": confidence,
+            "source": str(path),
+        }
+    return dataset
 
-if __name__ == '__main__':
-    # 테스트용
-    results = get_ocr_data()
-    import json
-    print(json.dumps(results, indent=4, ensure_ascii=False))
+
+def get_ocr_data() -> list[dict]:
+    dataset = collect_ocr_dataset()
+    return [
+        {
+            "name": name,
+            "size": size,
+            "beverageNutrition": payload["nutrition"],
+            "confidence": payload["confidence"],
+        }
+        for (name, size), payload in dataset.items()
+    ]
