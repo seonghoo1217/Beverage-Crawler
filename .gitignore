@@ -24,7 +24,7 @@ Thumbs.db
 .env.*
 
 # Data / storage outputs
-app/storage/bronze/
-app/storage/silver/
-app/storage/gold/
+app/storage/bronze/**/*.json
+app/storage/silver/**/*.json
+app/storage/gold/**/*.json
 data/

@@ -3,14 +3,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 from app.observability.logging import log_event
+from app.observability.metrics import metrics
 from app.ocr import collect_ocr_dataset
 from app.pipelines.bronze_ingest import persist_bronze_batch
 from app.pipelines.models import BronzeRecord
-from app.pipelines.silver_transform import convert_to_silver
+from app.pipelines.silver_transform import (
+    convert_to_silver,
+    generate_diff,
+    persist_silver_records,
+    write_change_log,
+)
 from app.pipelines.validators.dedup_validator import detect_duplicates
+from app.storage.silver.snapshot import load_latest_snapshot
 from app.starbucks_crawler import StarbucksCrawler, to_bronze_records
+from app.megacoffee_crawler import (
+    MegaCoffeeCrawler,
+    to_bronze_records as mega_to_bronze_records,
+)
 
 
 @dataclass
@@ -20,8 +32,25 @@ class PipelineResult:
     details: str
 
 
-def run_medallion_batch(triggered_by: str = "manual") -> PipelineResult:
+def run_medallion_batch(
+    triggered_by: str = "manual", brands: list[str] | None = None
+) -> PipelineResult:
     batch_id = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    brands = brands or ["Starbucks", "MegaCoffee"]
+    results: list[PipelineResult] = []
+    for brand in brands:
+        if brand == "Starbucks":
+            results.append(_run_starbucks(batch_id, triggered_by))
+        elif brand == "MegaCoffee":
+            results.append(_run_megacoffee(batch_id, triggered_by))
+    overall_status = (
+        "completed" if all(result.status == "completed" for result in results) else "partial"
+    )
+    details = "; ".join(result.details for result in results)
+    return PipelineResult(batch_id=batch_id, status=overall_status, details=details)
+
+
+def _run_starbucks(batch_id: str, triggered_by: str) -> PipelineResult:
     try:
         crawler = StarbucksCrawler()
         items = crawler.fetch_all()
@@ -34,6 +63,7 @@ def run_medallion_batch(triggered_by: str = "manual") -> PipelineResult:
         )
         duplicate_report = detect_duplicates(bronze_records)
         silver_records, validation_summary = convert_to_silver(bronze_records)
+        persist_silver_records("Starbucks", ingest_result.batch_id, silver_records)
         from reports.starbucks_quality_report import (
             StarbucksQualityContext,
             render_quality_report,
@@ -48,6 +78,7 @@ def run_medallion_batch(triggered_by: str = "manual") -> PipelineResult:
         )
         log_event(
             "pipeline.completed",
+            brand="Starbucks",
             batch_id=batch_id,
             triggered_by=triggered_by,
             record_count=len(bronze_records),
@@ -55,8 +86,44 @@ def run_medallion_batch(triggered_by: str = "manual") -> PipelineResult:
         return PipelineResult(
             batch_id=batch_id,
             status="completed",
-            details=f"Processed {len(silver_records)} Starbucks beverages",
+            details=f"Starbucks {len(silver_records)} records processed",
         )
     except Exception as exc:  # pragma: no cover - defensive logging
-        log_event("pipeline.failed", batch_id=batch_id, error=str(exc))
-        return PipelineResult(batch_id=batch_id, status="failed", details=str(exc))
+        log_event("pipeline.failed", brand="Starbucks", batch_id=batch_id, error=str(exc))
+        return PipelineResult(batch_id=batch_id, status="failed", details=f"Starbucks error: {exc}")
+
+
+def _run_megacoffee(batch_id: str, triggered_by: str) -> PipelineResult:
+    try:
+        crawler = MegaCoffeeCrawler()
+        items = crawler.fetch_all()
+        bronze_records: list[BronzeRecord] = mega_to_bronze_records(items, batch_id=batch_id)
+        ingest_result = persist_bronze_batch(
+            brand="MegaCoffee", records=bronze_records, batch_id=batch_id
+        )
+        duplicate_report = detect_duplicates(bronze_records)
+        silver_records, validation_summary = convert_to_silver(bronze_records)
+        previous_snapshot = load_latest_snapshot("MegaCoffee")
+        persist_silver_records("MegaCoffee", ingest_result.batch_id, silver_records)
+        diff = generate_diff(previous_snapshot, silver_records)
+        write_change_log(diff, Path("reports/megacoffee_change_log.md"))
+        metrics.set_gauge(
+            "megacoffee_crawl_success_rate",
+            1.0 if not duplicate_report.warnings else 0.99,
+        )
+        log_event(
+            "pipeline.completed",
+            brand="MegaCoffee",
+            batch_id=batch_id,
+            triggered_by=triggered_by,
+            record_count=len(bronze_records),
+        )
+        return PipelineResult(
+            batch_id=batch_id,
+            status="completed",
+            details=f"MegaCoffee {len(silver_records)} records processed",
+        )
+    except Exception as exc:  # pragma: no cover - defensive logging
+        metrics.set_gauge("megacoffee_crawl_success_rate", 0)
+        log_event("pipeline.failed", brand="MegaCoffee", batch_id=batch_id, error=str(exc))
+        return PipelineResult(batch_id=batch_id, status="failed", details=f"MegaCoffee error: {exc}")
